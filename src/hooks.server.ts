@@ -8,7 +8,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 
   event.locals.authenticated = authenticated;
 
-  if (!authenticated && pathname !== '/login') {
+const agentRoute = pathname.startsWith('/api/agent/');
+
+if (!authenticated && pathname !== '/login' && !agentRoute) {
     redirect(303, '/login');
   }
 
