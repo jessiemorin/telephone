@@ -49,6 +49,59 @@ export const POST: RequestHandler = async ({ request }) => {
   } else if (data.message === 'pong') {
     result = { status: 'done', message: 'pong' };
   } else if (
+    Array.isArray(data.audioBatch) &&
+    data.audioBatch.length >= 1 &&
+    data.audioBatch.length <= 2 &&
+    data.audioBatch.every((chunk: unknown) => {
+      if (!chunk || typeof chunk !== 'object') return false;
+      const c = chunk as Record<string, unknown>;
+
+      return (
+        typeof c.audio === 'string' &&
+        c.audio.length <= 180000 &&
+        /^[A-Za-z0-9+/]*={0,2}$/.test(c.audio) &&
+        Number.isInteger(c.index) &&
+        Number(c.index) >= 0 &&
+        Number.isInteger(c.total) &&
+        Number(c.total) >= 1 &&
+        Number(c.total) <= 128 &&
+        Number(c.index) < Number(c.total) &&
+        Number.isInteger(c.size) &&
+        Number(c.size) > 0 &&
+        Number(c.size) <= 16 * 1024 * 1024 &&
+        typeof c.mime === 'string' &&
+        ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4'].includes(c.mime)
+      );
+    })
+  ) {
+    const chunks = data.audioBatch as Array<{
+      audio: string;
+      index: number;
+      total: number;
+      size: number;
+      mime: string;
+    }>;
+
+    if (
+      chunks.some(
+        (c, i) =>
+          c.total !== chunks[0].total ||
+          c.size !== chunks[0].size ||
+          c.mime !== chunks[0].mime ||
+          c.index !== chunks[0].index + i
+      )
+    ) {
+      return json(
+        { error: 'Inconsistent audio batch' },
+        { status: 400 }
+      );
+    }
+
+    result = {
+      status: 'done',
+      audioBatch: chunks
+    };
+  } else if (
     typeof data.audio === 'string' &&
     data.audio.length <= 180000 &&
     /^[A-Za-z0-9+/]*={0,2}$/.test(data.audio) &&
