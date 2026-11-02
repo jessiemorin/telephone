@@ -1,4 +1,6 @@
 <script lang="ts">
+
+  import { onMount } from 'svelte';
   type FileEntry = {
     name: string;
     isDirectory: boolean;
@@ -94,6 +96,11 @@
     parts.pop();
     loadFiles(root, parts.join('/'));
   }
+
+
+onMount(() => {
+  loadFiles('sounds');
+});
 </script>
 
 <svelte:head>
