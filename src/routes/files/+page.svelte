@@ -138,20 +138,22 @@
       let total = 1;
       let mime = 'audio/mpeg';
 
-      for (let index = 0; index < total; index++) {
+      for (let index = 0; index < total;) {
         if (current !== audioRequest) return;
 
-        const response = await fetch('/api/files/audio', {
+        const response = await fetch('/api/files/audio-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             root: selectedRoot,
             path: selectedPath,
-            index
+            index,
+            count: 2
           })
         });
 
         const job = await response.json();
+
         if (!response.ok || !job.id) {
           throw new Error(job.error ?? 'Impossible de lire le fichier');
         }
@@ -160,30 +162,42 @@
         if (current !== audioRequest) return;
 
         if (
-          typeof result.audio !== 'string' ||
-          result.index !== index ||
-          !Number.isInteger(result.total) ||
-          result.total < 1 ||
-          result.total > 128
+          !Array.isArray(result.audioBatch) ||
+          result.audioBatch.length < 1 ||
+          result.audioBatch.length > 2
         ) {
-          throw new Error('Réponse audio invalide');
+          throw new Error('Lot audio invalide');
         }
 
-        if (index === 0) {
-          total = result.total;
-          mime = result.mime;
-        } else if (result.total !== total || result.mime !== mime) {
-          throw new Error('Le fichier a changé pendant le transfert');
-        }
+        for (const chunk of result.audioBatch) {
+          if (
+            typeof chunk.audio !== 'string' ||
+            chunk.index !== index ||
+            !Number.isInteger(chunk.total) ||
+            chunk.total < 1 ||
+            chunk.total > 128
+          ) {
+            throw new Error('Réponse audio invalide');
+          }
 
-        const binary = atob(result.audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
+          if (index === 0) {
+            total = chunk.total;
+            mime = chunk.mime;
+          } else if (chunk.total !== total || chunk.mime !== mime) {
+            throw new Error('Le fichier a changé pendant le transfert');
+          }
 
-        chunks.push(bytes);
-        audioProgress = Math.round(((index + 1) / total) * 100);
+          const binary = atob(chunk.audio);
+          const bytes = new Uint8Array(binary.length);
+
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+
+          chunks.push(bytes);
+          index++;
+          audioProgress = Math.round((index / total) * 100);
+        }
       }
 
       if (current !== audioRequest) return;
