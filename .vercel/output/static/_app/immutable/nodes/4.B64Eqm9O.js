@@ -1,2 +1,0 @@
-import{I as e,g as t,v as n}from"../chunks/DnlrnkMw.js";import"../chunks/B0eXlPq3.js";var r=n(`<div class="eyebrow svelte-1f75wov">PAYPHONE CONTROL</div> <h1 class="svelte-1f75wov">Telephone</h1> <div class="panel svelte-1f75wov"><div class="phone svelte-1f75wov">☎</div> <h2 class="svelte-1f75wov">Coming soon</h2> <p class="svelte-1f75wov">Remote ringing, sound playback, voicemail management,
-    telephone status and more.</p> <span class="svelte-1f75wov">MODULE UNDER DEVELOPMENT</span></div>`,1);function i(n){var i=r();e(4),t(n,i)}export{i as component};
