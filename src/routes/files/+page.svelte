@@ -87,6 +87,120 @@
     }
   }
 
+
+  let playingFile = $state('');
+  let audioUrl = $state('');
+  let audioLoading = $state(false);
+  let audioProgress = $state(0);
+  let audioError = $state('');
+  let audioRequest = 0;
+
+  function stopAudio() {
+    audioRequest++;
+    audioLoading = false;
+    playingFile = '';
+    audioProgress = 0;
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = '';
+  }
+
+  async function waitForJob(id: string, current: number) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (current !== audioRequest) throw new Error('Cancelled');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const response = await fetch(
+        `/api/pi/status?id=${encodeURIComponent(id)}`
+      );
+      if (!response.ok) throw new Error('Erreur de communication');
+
+      const result = await response.json();
+      if (result.status === 'error') {
+        throw new Error(result.message ?? 'Erreur audio');
+      }
+      if (result.status === 'done') return result;
+    }
+    throw new Error('Le Raspberry ne répond pas');
+  }
+
+  async function playAudio(name: string) {
+    stopAudio();
+    const current = audioRequest;
+    const selectedRoot = root;
+    const selectedPath = path ? `${path}/${name}` : name;
+
+    playingFile = name;
+    audioLoading = true;
+    audioError = '';
+
+    try {
+      const chunks: Uint8Array[] = [];
+      let total = 1;
+      let mime = 'audio/mpeg';
+
+      for (let index = 0; index < total; index++) {
+        if (current !== audioRequest) return;
+
+        const response = await fetch('/api/files/audio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            root: selectedRoot,
+            path: selectedPath,
+            index
+          })
+        });
+
+        const job = await response.json();
+        if (!response.ok || !job.id) {
+          throw new Error(job.error ?? 'Impossible de lire le fichier');
+        }
+
+        const result = await waitForJob(job.id, current);
+        if (current !== audioRequest) return;
+
+        if (
+          typeof result.audio !== 'string' ||
+          result.index !== index ||
+          !Number.isInteger(result.total) ||
+          result.total < 1 ||
+          result.total > 128
+        ) {
+          throw new Error('Réponse audio invalide');
+        }
+
+        if (index === 0) {
+          total = result.total;
+          mime = result.mime;
+        } else if (result.total !== total || result.mime !== mime) {
+          throw new Error('Le fichier a changé pendant le transfert');
+        }
+
+        const binary = atob(result.audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+
+        chunks.push(bytes);
+        audioProgress = Math.round(((index + 1) / total) * 100);
+      }
+
+      if (current !== audioRequest) return;
+
+      const blob = new Blob(
+        chunks.map((chunk) => Uint8Array.from(chunk).buffer),
+        { type: mime }
+      );
+      audioUrl = URL.createObjectURL(blob);
+      audioLoading = false;
+    } catch (err) {
+      if (current !== audioRequest) return;
+      audioLoading = false;
+      audioError = err instanceof Error ? err.message : 'Erreur audio';
+    }
+  }
+
   function openDirectory(name: string) {
     loadFiles(root, path ? `${path}/${name}` : name);
   }
@@ -131,6 +245,24 @@ onMount(() => {
     <button onclick={() => loadFiles(root, path)} disabled={loading}>↻ Actualiser</button>
   </div>
 
+  {#if playingFile}
+    <div class="audio-player">
+      <div class="player-heading">
+        <strong>♫ {playingFile}</strong>
+        <button onclick={stopAudio}>✕ Fermer</button>
+      </div>
+      {#if audioLoading}
+        <p>Chargement audio : {audioProgress}%</p>
+        <progress value={audioProgress} max="100"></progress>
+      {:else if audioUrl}
+        <audio controls autoplay src={audioUrl}></audio>
+      {/if}
+      {#if audioError}
+        <p class="error">{audioError}</p>
+      {/if}
+    </div>
+  {/if}
+
   {#if loading}
     <p class="message">◌ Communication avec le Raspberry...</p>
   {:else if error}
@@ -150,6 +282,13 @@ onMount(() => {
             <div class="filename">
               <span>♫</span>
               <span>{file.name}</span>
+              {#if /\\.(mp3|wav|ogg|m4a)$/i.test(file.name)}
+                <button
+                  class="play-button"
+                  onclick={() => playAudio(file.name)}
+                  disabled={audioLoading}
+                >▶ Écouter</button>
+              {/if}
             </div>
           {/if}
           <span class="size">{file.isDirectory ? 'DOSSIER' : formatSize(file.size)}</span>
@@ -197,5 +336,37 @@ onMount(() => {
   @media (max-width: 650px) {
     .entry { grid-template-columns: minmax(0, 1fr) 80px; }
     .modified { display: none; }
+  }
+
+  .play-button {
+    background: #254d32;
+    color: #c9f5d4;
+    border: 1px solid #568e66;
+    border-radius: 6px;
+    padding: 5px 9px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .audio-player {
+    padding: 18px;
+    margin-bottom: 14px;
+    background: #17251d;
+    border: 1px solid #568e66;
+    border-radius: 10px;
+  }
+  .player-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    margin-bottom: 12px;
+  }
+  .player-heading button {
+    background: transparent;
+    color: #c9f5d4;
+    border: 0;
+  }
+  .audio-player audio, .audio-player progress {
+    display: block;
+    width: 100%;
   }
 </style>

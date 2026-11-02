@@ -33,6 +33,30 @@ export const POST: RequestHandler = async ({ request }) => {
   } else if (data.message === 'pong') {
     result = { status: 'done', message: 'pong' };
   } else if (
+    typeof data.audio === 'string' &&
+    data.audio.length <= 180000 &&
+    /^[A-Za-z0-9+/]*={0,2}$/.test(data.audio) &&
+    Number.isInteger(data.index) &&
+    data.index >= 0 &&
+    Number.isInteger(data.total) &&
+    data.total >= 1 &&
+    data.total <= 128 &&
+    data.index < data.total &&
+    Number.isInteger(data.size) &&
+    data.size >= 0 &&
+    data.size <= 16 * 1024 * 1024 &&
+    typeof data.mime === 'string' &&
+    ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4'].includes(data.mime)
+  ) {
+    result = {
+      status: 'done',
+      audio: data.audio,
+      index: data.index,
+      total: data.total,
+      size: data.size,
+      mime: data.mime
+    };
+  } else if (
     Array.isArray(data.files) &&
     data.files.length <= 500 &&
     data.files.every((file: unknown) => {
