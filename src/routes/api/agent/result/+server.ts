@@ -30,6 +30,22 @@ export const POST: RequestHandler = async ({ request }) => {
       status: 'error',
       message: data.message.slice(0, 200)
     };
+  } else if (
+    data.upload &&
+    typeof data.upload === 'object' &&
+    !Array.isArray(data.upload) &&
+    Number.isInteger(data.upload.index) &&
+    data.upload.index >= 0 &&
+    data.upload.index < 256 &&
+    typeof data.upload.complete === 'boolean'
+  ) {
+    result = {
+      status: 'done',
+      upload: {
+        index: data.upload.index,
+        complete: data.upload.complete
+      }
+    };
   } else if (data.message === 'pong') {
     result = { status: 'done', message: 'pong' };
   } else if (
