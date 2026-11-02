@@ -282,7 +282,7 @@ onMount(() => {
             <div class="filename">
               <span>♫</span>
               <span>{file.name}</span>
-              {#if /\\.(mp3|wav|ogg|m4a)$/i.test(file.name)}
+              {#if /\.(mp3|wav|ogg|m4a)$/i.test(file.name)}
                 <button
                   class="play-button"
                   onclick={() => playAudio(file.name)}
