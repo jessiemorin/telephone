@@ -16,7 +16,10 @@
   <meta name="theme-color" content="#101416" />
 </svelte:head>
 
-<div class="app">
+{#if page.url.pathname === '/login'}
+  {@render children()}
+{:else}
+  <div class="app">
   <aside>
     <div class="brand">
       <div class="brand-icon">☎</div>
@@ -39,6 +42,9 @@
         </a>
       {/each}
     </nav>
+    <form method="POST" action="/logout" class="logout-form">
+  <button type="submit">↪ Sign out</button>
+</form>
 
     <div class="sidebar-bottom">
       <span class="status-dot"></span>
@@ -57,6 +63,7 @@
     </div>
   </main>
 </div>
+{/if}
 
 <style>
   :global(*) { box-sizing: border-box; }
@@ -188,4 +195,23 @@
     header { padding: 0 20px; }
     .content { padding: 25px 20px; }
   }
+
+  .logout-form {
+  margin-top: auto;
+  padding: 10px;
+}
+
+.logout-form button {
+  background: transparent;
+  color: #a9b7b0;
+  border: 0;
+  padding: 12px 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.logout-form button:hover {
+  color: #c5e69a;
+}
 </style>
