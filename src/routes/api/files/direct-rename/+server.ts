@@ -1,5 +1,4 @@
 import { json } from '@sveltejs/kit';
-import { loadEnv } from 'vite';
 import type { RequestHandler } from './$types.js';
 
 const ROOTS = ['sounds', 'sounds-kids', 'voicemail'];
@@ -36,9 +35,8 @@ export const POST: RequestHandler = async ({ request, locals, url, fetch }) => {
     return json({ error: 'Invalid request' }, { status: 400 });
   }
 
-  const env = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
-  const apiUrl = process.env.NORTEL_API_URL || env.NORTEL_API_URL;
-  const apiToken = process.env.NORTEL_API_TOKEN || env.NORTEL_API_TOKEN;
+    const apiUrl = process.env.NORTEL_API_URL;
+  const apiToken = process.env.NORTEL_API_TOKEN;
 
   if (!apiUrl || !apiToken) {
     return json({ error: 'API not configured' }, { status: 503 });
