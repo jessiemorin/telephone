@@ -39,51 +39,38 @@
     loading = true;
 
     try {
-      const response = await fetch('/api/files/list', {
+      const response = await fetch('/api/files/direct-list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ root: nextRoot, path: nextPath })
       });
 
-      const job = await response.json();
+      const result = await response.json();
 
-      if (!response.ok || !job.id) {
-        throw new Error(job.error ?? 'Impossible de demander les fichiers');
+      if (!response.ok || !Array.isArray(result.files)) {
+        throw new Error(result.error ?? 'Impossible de charger les fichiers');
       }
 
-      for (let attempt = 0; attempt < 15; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (currentRequest !== requestNumber) return;
 
-        if (currentRequest !== requestNumber) return;
+      files = result.files.map((file: {
+        name: string;
+        size: number;
+        modified: number;
+      }) => ({
+        name: file.name,
+        isDirectory: false,
+        size: file.size,
+        modified: new Date(file.modified * 1000).toISOString()
+      }));
 
-        const check = await fetch(
-          `/api/pi/status?id=${encodeURIComponent(job.id)}`
-        );
-
-        if (!check.ok) throw new Error('Erreur de communication');
-
-        const result = await check.json();
-
-        if (result.status === 'error') {
-          throw new Error(result.message ?? 'Erreur du Raspberry');
-        }
-
-        if (result.status === 'done') {
-          if (!Array.isArray(result.files)) {
-            throw new Error('Réponse invalide du Raspberry');
-          }
-
-          files = result.files;
-          loading = false;
-          return;
-        }
-      }
-
-      throw new Error('Le Raspberry ne répond pas (30 secondes)');
     } catch (err) {
       if (currentRequest !== requestNumber) return;
       error = err instanceof Error ? err.message : 'Erreur inconnue';
-      loading = false;
+    } finally {
+      if (currentRequest === requestNumber) {
+        loading = false;
+      }
     }
   }
 
@@ -125,94 +112,17 @@
 
   async function playAudio(name: string) {
     stopAudio();
-    const current = audioRequest;
-    const selectedRoot = root;
-    const selectedPath = path ? `${path}/${name}` : name;
 
     playingFile = name;
-    audioLoading = true;
+    audioLoading = false;
     audioError = '';
 
-    try {
-      const chunks: Uint8Array[] = [];
-      let total = 1;
-      let mime = 'audio/mpeg';
+    const params = new URLSearchParams({
+      root,
+      filename: name
+    });
 
-      for (let index = 0; index < total;) {
-        if (current !== audioRequest) return;
-
-        const response = await fetch('/api/files/audio-batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            root: selectedRoot,
-            path: selectedPath,
-            index,
-            count: 2
-          })
-        });
-
-        const job = await response.json();
-
-        if (!response.ok || !job.id) {
-          throw new Error(job.error ?? 'Impossible de lire le fichier');
-        }
-
-        const result = await waitForJob(job.id, current);
-        if (current !== audioRequest) return;
-
-        if (
-          !Array.isArray(result.audioBatch) ||
-          result.audioBatch.length < 1 ||
-          result.audioBatch.length > 2
-        ) {
-          throw new Error('Lot audio invalide');
-        }
-
-        for (const chunk of result.audioBatch) {
-          if (
-            typeof chunk.audio !== 'string' ||
-            chunk.index !== index ||
-            !Number.isInteger(chunk.total) ||
-            chunk.total < 1 ||
-            chunk.total > 128
-          ) {
-            throw new Error('Réponse audio invalide');
-          }
-
-          if (index === 0) {
-            total = chunk.total;
-            mime = chunk.mime;
-          } else if (chunk.total !== total || chunk.mime !== mime) {
-            throw new Error('Le fichier a changé pendant le transfert');
-          }
-
-          const binary = atob(chunk.audio);
-          const bytes = new Uint8Array(binary.length);
-
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-
-          chunks.push(bytes);
-          index++;
-          audioProgress = Math.round((index / total) * 100);
-        }
-      }
-
-      if (current !== audioRequest) return;
-
-      const blob = new Blob(
-        chunks.map((chunk) => Uint8Array.from(chunk).buffer),
-        { type: mime }
-      );
-      audioUrl = URL.createObjectURL(blob);
-      audioLoading = false;
-    } catch (err) {
-      if (current !== audioRequest) return;
-      audioLoading = false;
-      audioError = err instanceof Error ? err.message : 'Erreur audio';
-    }
+    audioUrl = `/api/files/direct-audio?${params.toString()}`;
   }
 
 
@@ -237,118 +147,59 @@
 
     uploading = true;
     uploadError = '';
+    uploadMessage = '';
     uploadProgress = 0;
 
     try {
-      for (let fileIndex = 0; fileIndex < selectedFiles.length; fileIndex++) {
-        const file = selectedFiles[fileIndex];
+      for (let index = 0; index < selectedFiles.length; index++) {
+        const file = selectedFiles[index];
 
         if (!/\.(mp3|wav|ogg|m4a)$/i.test(file.name)) {
           throw new Error(`Format non autorisé : ${file.name}`);
         }
 
-        if (file.size === 0 || file.size > UPLOAD_MAX_SIZE) {
-          throw new Error(`Taille invalide (maximum 16 Mio) : ${file.name}`);
+        if (file.size === 0 || file.size > 4 * 1024 * 1024) {
+          throw new Error(`Maximum 4 Mio : ${file.name}`);
         }
 
-        if (file.name.includes('/') || file.name.includes('\\')) {
+        if (file.name.includes('/') || file.name.includes('\\\\')) {
           throw new Error(`Nom invalide : ${file.name}`);
         }
 
-        // Vérification locale avant d'envoyer le premier morceau.
-        const existing = files.some(
-          (entry) => entry.name === file.name
-        );
-        if (existing) {
+        if (files.some((entry) => entry.name === file.name)) {
           throw new Error(`Ce fichier existe déjà : ${file.name}`);
         }
 
-        const content = await file.arrayBuffer();
-        const digest = await crypto.subtle.digest('SHA-256', content);
-        const sha256 = Array.from(new Uint8Array(digest))
-          .map((byte) => byte.toString(16).padStart(2, '0'))
-          .join('');
+        uploadMessage = `Envoi de ${file.name} (${index + 1}/${selectedFiles.length})`;
 
-        const transferId = crypto.randomUUID();
-        const total = Math.ceil(file.size / UPLOAD_CHUNK_SIZE);
+        const form = new FormData();
+        form.set('file', file);
 
-        for (let index = 0; index < total; index++) {
-          uploadMessage = `Envoi de ${file.name} (${fileIndex + 1}/${selectedFiles.length})`;
-
-          const start = index * UPLOAD_CHUNK_SIZE;
-          const end = Math.min(start + UPLOAD_CHUNK_SIZE, file.size);
-          const bytes = new Uint8Array(content.slice(start, end));
-
-          // Base64 par blocs pour éviter les limites des arguments JS.
-          let binary = '';
-          for (let offset = 0; offset < bytes.length; offset += 8192) {
-            binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-          }
-
-          const response = await fetch('/api/files/upload', {
+        const response = await fetch(
+          `/api/files/direct-upload?root=${encodeURIComponent(selectedRoot)}`,
+          {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              root: selectedRoot,
-              path: selectedPath,
-              name: file.name,
-              transferId,
-              index,
-              total,
-              size: file.size,
-              sha256,
-              data: btoa(binary)
-            })
-          });
-
-          const job = await response.json();
-          if (!response.ok || !job.id) {
-            throw new Error(job.error ?? "Impossible d'envoyer le morceau");
+            body: form
           }
+        );
 
-          // On attend l'accusé de réception du Raspberry.
-          let confirmed = false;
+        const result = await response.json();
 
-          for (let attempt = 0; attempt < 30; attempt++) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-
-            const check = await fetch(
-              `/api/pi/status?id=${encodeURIComponent(job.id)}`
-            );
-            if (!check.ok) {
-              throw new Error('Erreur de communication');
-            }
-
-            const result = await check.json();
-
-            if (result.status === 'error') {
-              throw new Error(result.message ?? "Erreur d'upload");
-            }
-
-            if (result.status === 'done') {
-              if (
-                !result.upload ||
-                result.upload.index !== index ||
-                result.upload.complete !== (index === total - 1)
-              ) {
-                throw new Error('Confirmation du Raspberry invalide');
-              }
-              confirmed = true;
-              break;
-            }
-          }
-
-          if (!confirmed) {
-            throw new Error('Délai dépassé : transfert interrompu');
-          }
-
-          uploadProgress = Math.round(
-            ((fileIndex + (index + 1) / total) / selectedFiles.length) * 100
+        if (!response.ok || !result.success) {
+          throw new Error(
+            typeof result.error === 'string'
+              ? result.error
+              : JSON.stringify(result.error ?? 'Erreur de transfert')
           );
         }
+
+        uploadProgress = Math.round(
+          ((index + 1) / selectedFiles.length) * 100
+        );
       }
 
       uploadMessage = '✓ Transfert terminé!';
+
       if (root === selectedRoot && path === selectedPath) {
         await loadFiles(selectedRoot, selectedPath);
       }
@@ -358,6 +209,102 @@
     } finally {
       uploading = false;
       if (fileInput) fileInput.value = '';
+    }
+  }
+
+
+  let fileActionError = $state('');
+  let busyFile = $state('');
+
+  async function renameFile(name: string) {
+    const newName = window.prompt('Nouveau nom du fichier :', name);
+
+    if (newName === null || newName === name) return;
+
+    if (
+      !newName ||
+      newName === '.' ||
+      newName === '..' ||
+      newName.includes('/') ||
+      newName.includes('\\') ||
+      !/\.(mp3|wav|ogg|m4a)$/i.test(newName)
+    ) {
+      fileActionError = 'Nom de fichier invalide';
+      return;
+    }
+
+    if (files.some((file) => file.name === newName)) {
+      fileActionError = 'Un fichier porte déjà ce nom';
+      return;
+    }
+
+    const selectedRoot = root;
+    fileActionError = '';
+    busyFile = name;
+
+    try {
+      const response = await fetch('/api/files/direct-rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          root: selectedRoot,
+          old_name: name,
+          new_name: newName
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error ?? 'Impossible de renommer');
+      }
+
+      if (playingFile === name) stopAudio();
+
+      if (root === selectedRoot) {
+        await loadFiles(selectedRoot);
+      }
+    } catch (err) {
+      fileActionError = err instanceof Error ? err.message : 'Erreur inconnue';
+    } finally {
+      busyFile = '';
+    }
+  }
+
+  async function deleteFile(name: string) {
+    if (!window.confirm(`Supprimer définitivement « ${name} » du Raspberry ?`)) {
+      return;
+    }
+
+    const selectedRoot = root;
+    fileActionError = '';
+    busyFile = name;
+
+    try {
+      const response = await fetch('/api/files/direct-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          root: selectedRoot,
+          filename: name
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error ?? 'Impossible de supprimer');
+      }
+
+      if (playingFile === name) stopAudio();
+
+      if (root === selectedRoot) {
+        await loadFiles(selectedRoot);
+      }
+    } catch (err) {
+      fileActionError = err instanceof Error ? err.message : 'Erreur inconnue';
+    } finally {
+      busyFile = '';
     }
   }
 
@@ -431,7 +378,7 @@ onMount(() => {
     ondrop={handleDrop}
   >
     <p>♫ Glisse tes fichiers audio ici</p>
-    <p class="upload-hint">MP3, WAV, OGG, M4A · Maximum 16 Mio par fichier</p>
+    <p class="upload-hint">MP3, WAV, OGG, M4A · Maximum 4 Mio par fichier</p>
 
     <input
       type="file"
@@ -458,22 +405,8 @@ onMount(() => {
     {/if}
   </div>
 
-  {#if playingFile}
-    <div class="audio-player">
-      <div class="player-heading">
-        <strong>♫ {playingFile}</strong>
-        <button onclick={stopAudio}>✕ Fermer</button>
-      </div>
-      {#if audioLoading}
-        <p>Chargement audio : {audioProgress}%</p>
-        <progress value={audioProgress} max="100"></progress>
-      {:else if audioUrl}
-        <audio controls autoplay src={audioUrl}></audio>
-      {/if}
-      {#if audioError}
-        <p class="error">{audioError}</p>
-      {/if}
-    </div>
+  {#if fileActionError}
+    <p class="message error">⚠ {fileActionError}</p>
   {/if}
 
   {#if loading}
@@ -504,9 +437,41 @@ onMount(() => {
               {/if}
             </div>
           {/if}
+          {#if !file.isDirectory}
+            <div class="file-actions">
+              <button
+                onclick={() => renameFile(file.name)}
+                disabled={!!busyFile || uploading}
+              >✏️ Renommer</button>
+              <button
+                class="delete-button"
+                onclick={() => deleteFile(file.name)}
+                disabled={!!busyFile || uploading}
+              >🗑️ Supprimer</button>
+            </div>
+          {/if}
           <span class="size">{file.isDirectory ? 'DOSSIER' : formatSize(file.size)}</span>
           <span class="modified">{file.modified ? new Date(file.modified).toLocaleDateString('fr-CA') : '—'}</span>
         </div>
+          {#if playingFile === file.name && !file.isDirectory}
+            <div class="inline-audio-player">
+              <div class="player-heading">
+                <strong>♫ {file.name}</strong>
+                <button onclick={stopAudio}>✕ Fermer</button>
+              </div>
+
+              {#if audioLoading}
+                <p>Chargement audio : {audioProgress}%</p>
+                <progress value={audioProgress} max="100"></progress>
+              {:else if audioUrl}
+                <audio controls autoplay src={audioUrl}></audio>
+              {/if}
+
+              {#if audioError}
+                <p class="error">{audioError}</p>
+              {/if}
+            </div>
+          {/if}
       {/each}
     </div>
   {/if}
@@ -577,6 +542,41 @@ onMount(() => {
     .modified { display: none; }
   }
 
+
+  .file-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .file-actions button {
+    background: #17251d;
+    color: #c9f5d4;
+    border: 1px solid #35513e;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .file-actions .delete-button {
+    color: #f1a4a4;
+    border-color: #704343;
+  }
+
+  .entry {
+    grid-template-columns: minmax(0, 1fr) auto 100px 120px;
+  }
+
+  @media (max-width: 750px) {
+    .entry {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .size, .modified {
+      display: none;
+    }
+  }
+
   .play-button {
     background: #254d32;
     color: #c9f5d4;
@@ -608,4 +608,31 @@ onMount(() => {
     display: block;
     width: 100%;
   }
+
+  .inline-audio-player {
+    padding: 16px 20px;
+    background: #1c3022;
+    border-bottom: 1px solid #568e66;
+  }
+
+  .inline-audio-player audio {
+    display: block;
+    width: 100%;
+  }
+
+  .inline-audio-player .player-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .inline-audio-player .player-heading button {
+    background: transparent;
+    border: 0;
+    color: #c9f5d4;
+    cursor: pointer;
+  }
+
 </style>
